@@ -1,0 +1,26 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@clerk/clerk-sdk-node": "^4.13.23",
+    "axios": "^1.12.2",
+    "csv-parse": "^6.1.0",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "pg": "^8.16.3",
+    "pm2": "^5.4.2",
+    "stripe": "^20.1.0",
+    "uuid": "^13.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "tle:daily": "node backend/jobs/fetchDailyTLEs.js",
+    "tle:start": "pm2 start backend/jobs/fetchDailyTLEs.js --name orbitiq-tle",
+    "tle:stop": "pm2 stop orbitiq-tle",
+    "tle:restart": "pm2 restart orbitiq-tle",
+    "tle:logs": "pm2 logs orbitiq-tle",
+    "tle:status": "pm2 status"
+  }
+}
