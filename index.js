@@ -32,14 +32,14 @@ app.use((req, res, next) => {
   ];
 
   if (allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
+    res.header('Access-Control-Allow-Origin', origin);
   }
 
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
-  res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Credentials", "true");
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Credentials', 'true');
 
-  if (req.method === "OPTIONS") {
+  if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
@@ -248,12 +248,14 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
   const userId = req.auth.userId;
 
   try {
+    // Try to get from user's row
     let result = await pool.query(
       "SELECT * FROM satellites WHERE norad_id::text = $1 AND user_id = $2",
       [norad_id, userId]
     );
     let sat = result.rows[0];
 
+    // If not found for this user, fetch from Space-Track and create row for this user
     if (!sat) {
       const fresh = await fetchFullSatelliteData(norad_id);
       if (!fresh) return res.status(404).json({ error: "Satellite not found" });
@@ -373,7 +375,6 @@ app.post("/add-satellite", async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 });
-
 // PROTECTED: tle_derived — filtered by user
 app.get('/api/tle_derived/:noradId', async (req, res) => {
   try {
