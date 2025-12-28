@@ -24,10 +24,24 @@ app.use(express.urlencoded({ extended: true }));
 
 // CORS — allow Vercel frontend (orbitiqspace.com) and localhost
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", process.env.FRONTEND_URL || "http://localhost:3001");
+  const origin = req.headers.origin;
+  const allowedOrigins = [
+    'http://localhost:3001',
+    'https://orbitiqspace.com',
+    'https://www.orbitiqspace.com'
+  ];
+
+  if (allowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+  }
+
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
   res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-  if (req.method === "OPTIONS") return res.sendStatus(200);
+  res.header("Access-Control-Allow-Credentials", "true");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
   next();
 });
 
