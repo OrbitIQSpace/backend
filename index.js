@@ -22,8 +22,9 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+// CORS — allow Vercel frontend (orbitiqspace.com) and localhost
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "http://localhost:3001");
+  res.header("Access-Control-Allow-Origin", process.env.FRONTEND_URL || "http://localhost:3001");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
   res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(200);
@@ -34,14 +35,14 @@ const upload = multer({ dest: "uploads/" });
 
 // ------------------------- DATABASE -------------------------
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
+  user: process.env.DB_USER || "postgres",
+  host: process.env.DB_HOST || "localhost",
+  database: process.env.DB_NAME || "orbitiq",
   password: process.env.DB_PASS,
-  port: process.DB_PORT,
+  port: process.env.DB_PORT || 5432,
 });
 
-// AUTO-ADD COLUMNS + user_id
+// AUTO-ADD COLUMNS + user_id + COMPOSITE KEY
 const initDatabase = async () => {
   try {
     await pool.query(`
@@ -64,17 +65,17 @@ const initDatabase = async () => {
       ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS user_id TEXT;
     `);
 
-    // Handle legacy data — assign to admin or public
+    // Fill NULL user_id with admin (safe for legacy data)
     await pool.query(`
-      UPDATE satellites SET user_id = 'legacy_admin' WHERE user_id IS NULL;
-      UPDATE tle_history SET user_id = 'legacy_admin' WHERE user_id IS NULL;
-      UPDATE tle_derived SET user_id = 'legacy_admin' WHERE user_id IS NULL;
-      UPDATE telemetry SET user_id = 'legacy_admin' WHERE user_id IS NULL;
+      UPDATE satellites SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
+      UPDATE tle_history SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
+      UPDATE tle_derived SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
+      UPDATE telemetry SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
     `);
 
     // Apply composite primary key
     await pool.query(`
-      ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_pkey;
+      ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_pkey CASCADE;
       ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_multi_user_key;
       ALTER TABLE satellites ADD CONSTRAINT satellites_multi_user_key PRIMARY KEY (norad_id, user_id);
     `);
@@ -203,7 +204,7 @@ app.use(requireAuth);
 app.get("/api/satellites", async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const isAdmin = userId === 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ'; // ← Your admin ID
+    const isAdmin = userId === 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ';
 
     let query = `
       SELECT norad_id, name, orbit_type, altitude, inclination,
@@ -233,14 +234,12 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
   const userId = req.auth.userId;
 
   try {
-    // Try to get from user's row
     let result = await pool.query(
       "SELECT * FROM satellites WHERE norad_id::text = $1 AND user_id = $2",
       [norad_id, userId]
     );
     let sat = result.rows[0];
 
-    // If not found for this user, fetch from Space-Track and create row for this user
     if (!sat) {
       const fresh = await fetchFullSatelliteData(norad_id);
       if (!fresh) return res.status(404).json({ error: "Satellite not found" });
@@ -300,7 +299,7 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
   }
 });
 
-// PROTECTED: Add satellite — per user (composite key safe)
+// PROTECTED: Add satellite — per user
 app.post("/add-satellite", async (req, res) => {
   const { norad_id } = req.body;
   const userId = req.auth.userId;
@@ -479,6 +478,7 @@ app.use((err, req, res, next) => {
 export { pool };
 
 // ------------------------- START SERVER -------------------------
-app.listen(3000, () => {
-  console.log("ORBITIQ BACKEND vFINAL — LIVE ON PORT 3000");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`ORBITIQ BACKEND vFINAL — LIVE ON PORT ${PORT}`);
 });
