@@ -211,14 +211,11 @@ app.get('/api/public/iss', async (req, res) => {
   }
 });
 
-// PROTECT ALL ROUTES BELOW THIS LINE
-app.use(requireAuth);
-
 // PROTECTED: Satellites list — admin sees all, users see own
-app.get("/api/satellites", async (req, res) => {
+app.get("/api/satellites", requireAuth, async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const isAdmin = userId === 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ';
+    const isAdmin = userId === 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ'; // ← Your admin Clerk ID
 
     let query = `
       SELECT norad_id, name, orbit_type, altitude, inclination,
@@ -238,79 +235,6 @@ app.get("/api/satellites", async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("Error fetching satellites:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// PROTECTED: Single satellite — per user
-app.get("/api/satellite/:norad_id", async (req, res) => {
-  const { norad_id } = req.params;
-  const userId = req.auth.userId;
-
-  try {
-    // Try to get from user's row
-    let result = await pool.query(
-      "SELECT * FROM satellites WHERE norad_id::text = $1 AND user_id = $2",
-      [norad_id, userId]
-    );
-    let sat = result.rows[0];
-
-    // If not found for this user, fetch from Space-Track and create row for this user
-    if (!sat) {
-      const fresh = await fetchFullSatelliteData(norad_id);
-      if (!fresh) return res.status(404).json({ error: "Satellite not found" });
-
-      const derived = calculateDerivedParams(fresh);
-
-      result = await pool.query(
-        `INSERT INTO satellites (
-          norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
-          eccentricity, semi_major_axis, perigee, apogee, period,
-          altitude, orbit_type, orbital_velocity_kms, orbital_velocity_kmh,
-          user_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-         ON CONFLICT (norad_id, user_id) DO UPDATE SET
-          name = EXCLUDED.name,
-          tle_line1 = EXCLUDED.tle_line1,
-          tle_line2 = EXCLUDED.tle_line2,
-          inclination = EXCLUDED.inclination,
-          mean_motion = EXCLUDED.mean_motion,
-          eccentricity = EXCLUDED.eccentricity,
-          semi_major_axis = EXCLUDED.semi_major_axis,
-          perigee = EXCLUDED.perigee,
-          apogee = EXCLUDED.apogee,
-          period = EXCLUDED.period,
-          altitude = EXCLUDED.altitude,
-          orbit_type = EXCLUDED.orbit_type,
-          orbital_velocity_kms = EXCLUDED.orbital_velocity_kms,
-          orbital_velocity_kmh = EXCLUDED.orbital_velocity_kmh
-         RETURNING *`,
-        [
-          fresh.norad_id,
-          fresh.name,
-          fresh.tle_line1,
-          fresh.tle_line2,
-          fresh.inclination,
-          fresh.mean_motion,
-          fresh.eccentricity,
-          fresh.semi_major_axis,
-          fresh.perigee,
-          fresh.apogee,
-          fresh.period,
-          derived.altitude,
-          derived.orbit_type,
-          derived.orbital_velocity_kms,
-          derived.orbital_velocity_kmh,
-          userId
-        ]
-      );
-
-      sat = result.rows[0];
-    }
-
-    res.json(sat);
-  } catch (err) {
-    console.error("Error fetching satellite:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
