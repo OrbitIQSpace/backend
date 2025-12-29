@@ -29,7 +29,7 @@ app.use((req, res, next) => {
     'http://localhost:3001',
     'https://orbitiqspace.com',
     'https://www.orbitiqspace.com',
-    'https://orbitiq-frontend-ich4hxbr5-orbit-iq.vercel.app'
+    'https://orbitiq-frontend-kenkicub5-orbit-iq.vercel.app'
   ];
 
   if (allowedOrigins.includes(origin)) {
