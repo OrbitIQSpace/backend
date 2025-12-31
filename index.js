@@ -1,4 +1,3 @@
-// ------------------------- LOAD ENV FIRST (CRITICAL FOR ESM) -------------------------
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -6,10 +5,8 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// MUST BE FIRST — BEFORE ANY OTHER IMPORTS
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
-// ------------------------- NOW IMPORT EVERYTHING ELSE -------------------------
 import express from "express";
 import { Pool } from "pg";
 import axios from "axios";
