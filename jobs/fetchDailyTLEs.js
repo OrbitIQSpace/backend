@@ -1,4 +1,4 @@
-// backend/jobs/fetchDailyTLEs.js — FINAL, WORKING WITH MULTI-TENANCY
+// backend/jobs/fetchDailyTLEs.js — CRON JOB VERSION (runs once per trigger)
 import axios from 'axios';
 import { pool } from '../index.js';
 
@@ -13,17 +13,22 @@ let cookies = null;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const login = async () => {
+  if (!USERNAME || !PASSWORD) {
+    console.error('SPACETRACK_USER or SPACETRACK_PASS not set');
+    return false;
+  }
+
   try {
-    const res = await axios.post(
+    const resp = await axios.post(
       'https://www.space-track.org/ajaxauth/login',
-      `identity=${USERNAME}&password=${PASSWORD}`,
+      `identity=${encodeURIComponent(USERNAME)}&password=${encodeURIComponent(PASSWORD)}`,
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
-    cookies = res.headers['set-cookie'];
+    cookies = resp.headers['set-cookie'];
     console.log('✅ Space-Track login successful');
     return true;
   } catch (err) {
-    console.error('❌ Login failed:', err.response?.data || err.message);
+    console.error('❌ Space-Track login failed:', err.response?.data || err.message);
     cookies = null;
     return false;
   }
@@ -33,7 +38,7 @@ const calculateDerived = (line1, line2) => {
   if (!line1 || !line2) return null;
 
   const meanMotion = parseFloat(line2.slice(52, 63));
-  if (!meanMotion) return null;
+  if (!meanMotion || meanMotion <= 0) return null;
 
   const periodSec = 86400 / meanMotion;
   const periodMin = periodSec / 60;
@@ -75,7 +80,9 @@ const calculateDerived = (line1, line2) => {
   };
 };
 
-const fetchAndStoreTLEs = async (retryCount = 0) => {
+const fetchAndStoreTLEs = async () => {
+  console.log('🚀 TLE fetch job triggered:', new Date().toISOString());
+
   if (!cookies && !(await login())) {
     console.log('Skipping TLE fetch — no session');
     return;
@@ -87,121 +94,97 @@ const fetchAndStoreTLEs = async (retryCount = 0) => {
       FROM satellites 
       WHERE norad_id IS NOT NULL AND user_id IS NOT NULL
     `);
-    if (rows.length === 0) return console.log('⚠️ No satellites with user_id in DB to update');
 
-    const noradList = rows.map(r => r.norad_id).join(',');
-    const userMap = {};
-    rows.forEach(r => userMap[r.norad_id] = r.user_id);
+    if (rows.length === 0) {
+      console.log('⚠️ No satellites to update');
+      return;
+    }
 
-    const url = `https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/${noradList}/orderby/EPOCH%20desc/format/tle`;
+    console.log(`📡 Fetching latest TLEs for ${rows.length} satellites...`);
 
-    console.log(`📡 Fetching TLEs for ${rows.length} satellites...`);
-
-    const response = await axios.get(url, {
-      headers: { Cookie: cookies.join('; ') },
-      timeout: 30000,
-    });
-
-    const lines = response.data.trim().split('\n').map(l => l.trim()).filter(Boolean);
     let storedCount = 0;
-    let i = 0;
 
-    while (i < lines.length) {
-      let name = 'UNKNOWN';
-      let line1 = lines[i];
-      let line2 = lines[i + 1];
+    for (const { norad_id: norad, user_id: userId } of rows) {
+      try {
+        const url = `https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/${norad}/orderby/EPOCH%20desc/format/tle/limit/1`;
 
-      if (line1 && !line1.startsWith('1 ')) {
-        name = line1;
-        line1 = lines[i + 1];
-        line2 = lines[i + 2];
-        i += 3;
-      } else {
-        line2 = lines[i + 1];
-        i += 2;
+        const response = await axios.get(url, {
+          headers: { Cookie: cookies.join('; ') },
+          timeout: 15000,
+        });
+
+        const data = response.data.trim();
+        if (!data) {
+          console.warn(`No TLE data returned for NORAD ${norad}`);
+          continue;
+        }
+
+        const lines = data.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length < 2) {
+          console.warn(`Invalid TLE format for NORAD ${norad}`);
+          continue;
+        }
+
+        let name = lines[0];
+        let line1 = lines[1];
+        let line2 = lines[2] || lines[1];
+
+        const year = parseInt(line1.slice(18, 20));
+        const dayOfYear = parseFloat(line1.slice(20, 32));
+        const fullYear = year < 57 ? 2000 + year : 1900 + year;
+        const epochDate = new Date(Date.UTC(fullYear, 0));
+        epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
+        const fraction = dayOfYear % 1;
+        epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
+
+        const derived = calculateDerived(line1, line2);
+        if (!derived) {
+          console.warn(`Failed to calculate derived params for NORAD ${norad}`);
+          continue;
+        }
+
+        await pool.query(`
+          INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
+        `, [norad, name, line1, line2, epochDate, userId]);
+
+        await pool.query(`
+          INSERT INTO tle_derived (
+            norad_id, name, epoch,
+            inclination, eccentricity, mean_motion,
+            semi_major_axis_km, perigee_km, apogee_km,
+            orbital_period_minutes, altitude_km, velocity_kms,
+            raan, arg_perigee, mean_anomaly,
+            bstar, mean_motion_dot, mean_motion_ddot,
+            user_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+          )
+          ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
+        `, [
+          norad, name, epochDate,
+          derived.inclination, derived.eccentricity, derived.mean_motion,
+          derived.semi_major_axis_km, derived.perigee_km, derived.apogee_km,
+          derived.orbital_period_minutes, derived.altitude_km, derived.velocity_kms,
+          derived.raan, derived.arg_perigee, derived.mean_anomaly,
+          derived.bstar, derived.mean_motion_dot, derived.mean_motion_ddot,
+          userId
+        ]);
+
+        storedCount++;
+      } catch (err) {
+        console.warn(`Failed for NORAD ${norad}:`, err.message);
       }
 
-      if (!line1 || !line2 || !line1.startsWith('1 ') || !line2.startsWith('2 ')) {
-        console.warn('Skipping invalid TLE block');
-        continue;
-      }
-
-      const norad = line1.slice(2, 7).trim();
-      const userId = userMap[norad];
-
-      if (!userId) {
-        console.warn(`No user_id found for NORAD ${norad} — skipping`);
-        continue;
-      }
-
-      const year = parseInt(line1.slice(18, 20));
-      const dayOfYear = parseFloat(line1.slice(20, 32));
-      const fullYear = year < 57 ? 2000 + year : 1900 + year;
-      const epochDate = new Date(Date.UTC(fullYear, 0));
-      epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
-      const fraction = dayOfYear % 1;
-      epochDate.setSeconds(epochDate.getSeconds() + (fraction * 86400));
-
-      const derived = calculateDerived(line1, line2);
-      if (!derived) continue;
-
-      // tle_history — ON CONFLICT (norad_id, epoch, user_id)
-      await pool.query(`
-        INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
-      `, [norad, name, line1, line2, epochDate, userId]);
-
-      // tle_derived — ON CONFLICT (norad_id, epoch, user_id)
-      await pool.query(`
-        INSERT INTO tle_derived (
-          norad_id, name, epoch,
-          inclination, eccentricity, mean_motion,
-          semi_major_axis_km, perigee_km, apogee_km,
-          orbital_period_minutes, altitude_km, velocity_kms,
-          raan, arg_perigee, mean_anomaly,
-          bstar, mean_motion_dot, mean_motion_ddot,
-          user_id
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-        )
-        ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
-      `, [
-        norad, name, epochDate,
-        derived.inclination, derived.eccentricity, derived.mean_motion,
-        derived.semi_major_axis_km, derived.perigee_km, derived.apogee_km,
-        derived.orbital_period_minutes, derived.altitude_km, derived.velocity_kms,
-        derived.raan, derived.arg_perigee, derived.mean_anomaly,
-        derived.bstar, derived.mean_motion_dot, derived.mean_motion_ddot,
-        userId
-      ]);
-
-      storedCount++;
+      await sleep(1000); // Be kind to Space-Track
     }
 
-    console.log(`✅ Successfully processed TLEs. Stored/Checked: ${storedCount}`);
+    console.log(`✅ TLE fetch complete — processed ${storedCount} satellites`);
   } catch (err) {
-    console.error(`❌ TLE fetch attempt ${retryCount + 1} failed:`, err.message);
-
-    if (retryCount < 3) {
-      console.log(`⏳ Retrying in 30 seconds...`);
-      cookies = null;
-      await sleep(30000);
-      return fetchAndStoreTLEs(retryCount + 1);
-    } else {
-      console.error('🚫 Giving up after 3 failed attempts.');
-    }
+    console.error('❌ TLE fetch job failed:', err.message);
   }
 };
 
-const runForever = async () => {
-  console.log('🚀 OrbitIQ TLE fetch job STARTED — running every 12 hours');
-  await fetchAndStoreTLEs();
 
-  setInterval(async () => {
-    console.log('⏰ 12h TLE fetch triggered:', new Date().toISOString());
-    await fetchAndStoreTLEs();
-  }, 12 * 60 * 60 * 1000);
-};
-
-runForever();
+fetchAndStoreTLEs();
