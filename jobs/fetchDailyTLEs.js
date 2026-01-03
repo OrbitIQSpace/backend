@@ -177,7 +177,7 @@ const fetchAndStoreTLEs = async () => {
         console.warn(`Failed for NORAD ${norad}:`, err.message);
       }
 
-      await sleep(1000); // Be kind to Space-Track
+      await sleep(1000); 
     }
 
     console.log(`✅ TLE fetch complete — processed ${storedCount} satellites`);
