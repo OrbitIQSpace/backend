@@ -1,3 +1,4 @@
+// ------------------------- LOAD ENV FIRST (CRITICAL FOR ESM) -------------------------
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -7,6 +8,7 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
+// ------------------------- NOW IMPORT EVERYTHING ELSE -------------------------
 import express from "express";
 import { Pool } from "pg";
 import axios from "axios";
@@ -26,7 +28,6 @@ app.use((req, res, next) => {
     'http://localhost:3001',
     'https://orbitiqspace.com',
     'https://www.orbitiqspace.com',
-    'https://orbitiq-frontend-kenkicub5-orbit-iq.vercel.app'
   ];
 
   if (allowedOrigins.includes(origin)) {
@@ -315,8 +316,8 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
   }
 });
 
-// PROTECTED: Add satellite — per user
-app.post("/add-satellite", async (req, res) => {
+// PROTECTED: Add satellite — per user + store full TLE history on add
+app.post("/add-satellite", requireAuth, async (req, res) => {
   const { norad_id } = req.body;
   const userId = req.auth.userId;
 
@@ -327,7 +328,17 @@ app.post("/add-satellite", async (req, res) => {
 
   const derived = calculateDerivedParams(data);
 
+  // Parse epoch for history tables
+  const year = parseInt(data.tle_line1.slice(18, 20));
+  const dayOfYear = parseFloat(data.tle_line1.slice(20, 32));
+  const fullYear = year < 57 ? 2000 + year : 1900 + year;
+  const epochDate = new Date(Date.UTC(fullYear, 0));
+  epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
+  const fraction = dayOfYear % 1;
+  epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
+
   try {
+    // 1. Insert/update main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -369,6 +380,38 @@ app.post("/add-satellite", async (req, res) => {
         userId
       ]
     );
+
+    // 2. Insert into tle_history (for raw TLE history)
+    await pool.query(`
+      INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
+    `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
+
+    // 3. Insert into tle_derived (for graphs)
+    await pool.query(`
+      INSERT INTO tle_derived (
+        norad_id, name, epoch,
+        inclination, eccentricity, mean_motion,
+        semi_major_axis_km, perigee_km, apogee_km,
+        orbital_period_minutes, altitude_km, velocity_kms,
+        raan, arg_perigee, mean_anomaly,
+        bstar, mean_motion_dot, mean_motion_ddot,
+        user_id
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+      )
+      ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
+    `, [
+      data.norad_id, data.name, epochDate,
+      derived.inclination, derived.eccentricity, derived.mean_motion,
+      derived.semi_major_axis_km, derived.perigee_km, derived.apogee_km,
+      derived.orbital_period_minutes, derived.altitude_km, derived.velocity_kms,
+      derived.raan, derived.arg_perigee, derived.mean_anomaly,
+      derived.bstar, derived.mean_motion_dot, derived.mean_motion_ddot,
+      userId
+    ]);
+
     res.json({ success: true });
   } catch (err) {
     console.error("DB insert error:", err);
