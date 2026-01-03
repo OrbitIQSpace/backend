@@ -328,7 +328,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
   const derived = calculateDerivedParams(data);
 
-  // Parse epoch for history tables
+  // Parse epoch
   const year = parseInt(data.tle_line1.slice(18, 20));
   const dayOfYear = parseFloat(data.tle_line1.slice(20, 32));
   const fullYear = year < 57 ? 2000 + year : 1900 + year;
@@ -338,7 +338,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
 
   try {
-    // 1. Insert/update main satellite record
+    // Main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -381,14 +381,14 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ]
     );
 
-    // 2. Insert into tle_history
+    // tle_history
     await pool.query(`
       INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived — FIXED: 20 values (19 columns + user_id)
+    // tle_derived — FIXED: 20 values (19 columns + user_id)
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
