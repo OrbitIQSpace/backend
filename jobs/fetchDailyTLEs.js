@@ -388,9 +388,9 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // tle_derived — FIXED: 20 values (19 columns + user_id)
+    // tle_derived — FIXED: 20 values 
     await pool.query(`
-      INSERT INTO tle_derived (
+      INSERT INTO tle_derived (id,
         norad_id, name, epoch,
         inclination, eccentricity, mean_motion,
         semi_major_axis_km, perigee_km, apogee_km,
