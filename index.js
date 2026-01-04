@@ -51,7 +51,7 @@ const upload = multer({ dest: "uploads/" });
 // Prioritizes DATABASE_URL (Render, Railway, Supabase standard)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false, // Required for hosted DBs
   // Fallback for local development
   user: process.env.DB_USER || "postgres",
   host: process.env.DB_HOST || "localhost",
@@ -264,16 +264,16 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
           fresh.name,
           fresh.tle_line1,
           fresh.tle_line2,
-          derived.inclination,
-          derived.mean_motion,
-          derived.eccentricity,
-          derived.semi_major_axis_km,
-          derived.perigee_km,
-          derived.apogee_km,
-          derived.orbital_period_minutes,
-          derived.altitude_km,
+          fresh.inclination,
+          fresh.mean_motion,
+          fresh.eccentricity,
+          fresh.semi_major_axis,
+          fresh.perigee,
+          fresh.apogee,
+          fresh.period,
+          derived.altitude,
           derived.orbit_type,
-          derived.velocity_kms,
+          derived.orbital_velocity_kms,
           derived.orbital_velocity_kmh,
           userId
         ]
@@ -302,7 +302,6 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   const derived = populateDerived(data.tle_line1, data.tle_line2);
   if (!derived) return res.status(500).json({ error: "Failed to calculate derived parameters" });
 
-  // Parse epoch
   let epochDate;
   try {
     const year = parseInt(data.tle_line1.slice(18, 20));
@@ -318,7 +317,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   }
 
   try {
-    // 1. Insert/update main satellite record
+    // 1. Main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -368,7 +367,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived — 19 columns + values (id auto-generated)
+    // 3. Insert into tle_derived — 19 columns + 19 values
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
