@@ -82,14 +82,6 @@ const initDatabase = async () => {
       ALTER TABLE tle_derived ADD COLUMN IF NOT EXISTS user_id TEXT;
       ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS user_id TEXT;
     `);
-
-    await pool.query(`
-      UPDATE satellites SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
-      UPDATE tle_history SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
-      UPDATE tle_derived SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
-      UPDATE telemetry SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
-    `);
-
     await pool.query(`
       ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_pkey CASCADE;
       ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_multi_user_key;
