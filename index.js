@@ -16,7 +16,7 @@ import multer from "multer";
 import csv from "csv-parser";
 import { createReadStream, unlinkSync } from "fs";
 import { ClerkExpressRequireAuth } from '@clerk/clerk-sdk-node';
-import { populateDerived } from './scripts/populatedDerived.js'; // ← Accurate TLE parser
+import { populateDerived } from './scripts/populatedDerived.js'; // ← Full TLE parser
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -51,7 +51,7 @@ const upload = multer({ dest: "uploads/" });
 // Prioritizes DATABASE_URL (Render, Railway, Supabase standard)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false, // Required for hosted DBs
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
   // Fallback for local development
   user: process.env.DB_USER || "postgres",
   host: process.env.DB_HOST || "localhost",
@@ -60,40 +60,8 @@ const pool = new Pool({
   port: process.env.DB_PORT || 5432,
 });
 
-// AUTO-ADD COLUMNS + user_id + COMPOSITE KEY
-const initDatabase = async () => {
-  try {
-    await pool.query(`
-      ALTER TABLE satellites
-      ADD COLUMN IF NOT EXISTS tle_line1 TEXT,
-      ADD COLUMN IF NOT EXISTS tle_line2 TEXT,
-      ADD COLUMN IF NOT EXISTS eccentricity FLOAT,
-      ADD COLUMN IF NOT EXISTS semi_major_axis FLOAT,
-      ADD COLUMN IF NOT EXISTS perigee FLOAT,
-      ADD COLUMN IF NOT EXISTS apogee FLOAT,
-      ADD COLUMN IF NOT EXISTS period FLOAT,
-      ADD COLUMN IF NOT EXISTS altitude INTEGER,
-      ADD COLUMN IF NOT EXISTS orbit_type TEXT,
-      ADD COLUMN IF NOT EXISTS orbital_velocity_kms TEXT,
-      ADD COLUMN IF NOT EXISTS orbital_velocity_kmh INTEGER,
-      ADD COLUMN IF NOT EXISTS user_id TEXT;
-
-      ALTER TABLE tle_history ADD COLUMN IF NOT EXISTS user_id TEXT;
-      ALTER TABLE tle_derived ADD COLUMN IF NOT EXISTS user_id TEXT;
-      ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS user_id TEXT;
-    `);
-    await pool.query(`
-      ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_pkey CASCADE;
-      ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_multi_user_key;
-      ALTER TABLE satellites ADD CONSTRAINT satellites_multi_user_key PRIMARY KEY (norad_id, user_id);
-    `);
-
-    console.log("✅ Database migration successful: Multi-tenancy active");
-  } catch (err) {
-    console.error("❌ DB init error:", err.message);
-  }
-};
-initDatabase();
+// ------------------------- NO initDatabase() IN PRODUCTION -------------------------
+// Migration already run manually — no need to run on every start
 
 // ------------------------- CLERK AUTH MIDDLEWARE -------------------------
 const requireAuth = ClerkExpressRequireAuth();
@@ -256,16 +224,16 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
           fresh.name,
           fresh.tle_line1,
           fresh.tle_line2,
-          fresh.inclination,
-          fresh.mean_motion,
-          fresh.eccentricity,
-          fresh.semi_major_axis,
-          fresh.perigee,
-          fresh.apogee,
-          fresh.period,
-          derived.altitude,
+          derived.inclination,
+          derived.mean_motion,
+          derived.eccentricity,
+          derived.semi_major_axis_km,
+          derived.perigee_km,
+          derived.apogee_km,
+          derived.orbital_period_minutes,
+          derived.altitude_km,
           derived.orbit_type,
-          derived.orbital_velocity_kms,
+          derived.velocity_kms,
           derived.orbital_velocity_kmh,
           userId
         ]
@@ -390,6 +358,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 });
+
 // PROTECTED: tle_derived — filtered by user
 app.get('/api/tle_derived/:noradId', async (req, res) => {
   try {
