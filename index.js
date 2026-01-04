@@ -318,7 +318,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   }
 
   try {
-    // 1. Main satellite record
+    // 1. Insert/update main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -361,14 +361,14 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ]
     );
 
-    // 2. tle_history
+    // 2. Insert into tle_history
     await pool.query(`
       INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. tle_derived — 19 columns + user_id = 20 values
+    // 3. Insert into tle_derived — 19 columns (id auto-generated)
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
@@ -379,7 +379,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         bstar, mean_motion_dot, mean_motion_ddot,
         user_id
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       )
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [
@@ -398,7 +398,6 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 });
-
 // PROTECTED: tle_derived — filtered by user
 app.get('/api/tle_derived/:noradId', async (req, res) => {
   try {
