@@ -326,20 +326,25 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   const data = await fetchFullSatelliteData(norad_id);
   if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
 
-  const derived = calculateDerived(data.tle_line1, data.tle_line2); // ← Use calculateDerived(line1, line2) to parse all fields
-  if (!derived) return res.status(500).json({ error: "Failed to calculate derived parameters" });
+  const derived = calculateDerivedParams(data);
+  if (!derived) return res.status(500).json({ error: "Failed to calculate orbital parameters" });
 
-  // Parse epoch for history tables
-  const year = parseInt(data.tle_line1.slice(18, 20));
-  const dayOfYear = parseFloat(data.tle_line1.slice(20, 32));
-  const fullYear = year < 57 ? 2000 + year : 1900 + year;
-  const epochDate = new Date(Date.UTC(fullYear, 0));
-  epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
-  const fraction = dayOfYear % 1;
-  epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
+  // Parse epoch safely
+  try {
+    const year = parseInt(data.tle_line1.slice(18, 20));
+    const dayOfYear = parseFloat(data.tle_line1.slice(20, 32));
+    const fullYear = year < 57 ? 2000 + year : 1900 + year;
+    const epochDate = new Date(Date.UTC(fullYear, 0));
+    epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
+    const fraction = dayOfYear % 1;
+    epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
+  } catch (err) {
+    console.error("Epoch parsing error:", err);
+    return res.status(500).json({ error: "Invalid TLE epoch" });
+  }
 
   try {
-    // 1. Insert/update main satellite record
+    // 1. Main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -367,7 +372,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         data.name,
         data.tle_line1,
         data.tle_line2,
-        derived.inclination, // ← Use derived for all fields
+        derived.inclination,
         derived.mean_motion,
         derived.eccentricity,
         derived.semi_major_axis_km,
@@ -377,19 +382,19 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         derived.altitude_km,
         derived.orbit_type,
         derived.velocity_kms,
-        derived.orbital_period_minutes * 60, // Calculate orbital_velocity_kmh if needed
+        derived.orbital_velocity_kmh,
         userId
       ]
     );
 
-    // 2. Insert into tle_history
+    // 2. tle_history
     await pool.query(`
       INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived
+    // 3. tle_derived — 19 columns (id auto)
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
@@ -415,40 +420,8 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("DB insert error:", err);
-    res.status(500).json({ error: "Database error" });
-  }
-});
-// PROTECTED: tle_derived — filtered by user
-app.get('/api/tle_derived/:noradId', async (req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT 
-        epoch,
-        inclination,
-        eccentricity,
-        mean_motion,
-        semi_major_axis_km,
-        perigee_km,
-        apogee_km,
-        orbital_period_minutes,
-        altitude_km,
-        velocity_kms,
-        raan,
-        arg_perigee,
-        mean_anomaly,
-        bstar,
-        mean_motion_dot,
-        mean_motion_ddot
-      FROM tle_derived 
-      WHERE norad_id = $1 AND user_id = $2
-      ORDER BY epoch ASC
-    `, [req.params.noradId, req.auth.userId]);
-
-    res.json(rows);
-  } catch (err) {
-    console.error('tle_derived fetch error:', err);
-    res.status(500).json({ error: "Server error" });
+    console.error("Add satellite DB error:", err);
+    res.status(500).json({ error: "Database error: " + err.message });
   }
 });
 
