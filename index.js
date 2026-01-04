@@ -16,7 +16,7 @@ import multer from "multer";
 import csv from "csv-parser";
 import { createReadStream, unlinkSync } from "fs";
 import { ClerkExpressRequireAuth } from '@clerk/clerk-sdk-node';
-import { populateDerived } from './scripts/populateDerived.js'; // ← Accurate TLE parser
+import { populateDerived } from './scripts/populatedDerived.js'; // ← Accurate TLE parser
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
