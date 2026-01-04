@@ -368,29 +368,29 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived — 19 columns (id auto-generated)
+    // 3. Insert into tle_derived — 19 columns + values (id auto-generated)
     await pool.query(`
       INSERT INTO tle_derived (
-     norad_id, name, epoch,
-      inclination, eccentricity, mean_motion,
-      semi_major_axis_km, perigee_km, apogee_km,
-      orbital_period_minutes, altitude_km, velocity_kms,
-      raan, arg_perigee, mean_anomaly,
-      bstar, mean_motion_dot, mean_motion_ddot,
-      user_id
-    )  VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-    )
-    ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
-  `, [
-    data.norad_id, data.name, epochDate,
-    derived.inclination, derived.eccentricity, derived.mean_motion,
-    derived.semi_major_axis_km, derived.perigee_km, derived.apogee_km,
-    derived.orbital_period_minutes, derived.altitude_km, derived.velocity_kms,
-    derived.raan, derived.arg_perigee, derived.mean_anomaly,
-    derived.bstar, derived.mean_motion_dot, derived.mean_motion_ddot,
-    userId
-  ]);
+        norad_id, name, epoch,
+        inclination, eccentricity, mean_motion,
+        semi_major_axis_km, perigee_km, apogee_km,
+        orbital_period_minutes, altitude_km, velocity_kms,
+        raan, arg_perigee, mean_anomaly,
+        bstar, mean_motion_dot, mean_motion_ddot,
+        user_id
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+      )
+      ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
+    `, [
+      data.norad_id, data.name, epochDate,
+      derived.inclination, derived.eccentricity, derived.mean_motion,
+      derived.semi_major_axis_km, derived.perigee_km, derived.apogee_km,
+      derived.orbital_period_minutes, derived.altitude_km, derived.velocity_kms,
+      derived.raan, derived.arg_perigee, derived.mean_anomaly,
+      derived.bstar, derived.mean_motion_dot, derived.mean_motion_ddot,
+      userId
+    ]);
 
     res.json({ success: true });
   } catch (err) {
@@ -398,6 +398,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 });
+
 // PROTECTED: tle_derived — filtered by user
 app.get('/api/tle_derived/:noradId', async (req, res) => {
   try {
