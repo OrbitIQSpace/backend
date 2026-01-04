@@ -16,6 +16,7 @@ import multer from "multer";
 import csv from "csv-parser";
 import { createReadStream, unlinkSync } from "fs";
 import { ClerkExpressRequireAuth } from '@clerk/clerk-sdk-node';
+import { populateDerived } from './scripts/populatedDerived.js';
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -326,9 +327,11 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   const data = await fetchFullSatelliteData(norad_id);
   if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
 
-  const derived = calculateDerivedParams(data);
+  // <-- NEW: use the shared helper that works with raw TLE lines
+  const derived = populateDerived(data.tle_line1, data.tle_line2);
+  if (!derived) return res.status(500).json({ error: "Failed to derive orbital parameters" });
 
-  // Move epochDate outside try block
+  // Parse epoch (same as before)
   let epochDate;
   try {
     const year = parseInt(data.tle_line1.slice(18, 20));
@@ -338,13 +341,13 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
     epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
     const fraction = dayOfYear % 1;
     epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
-  } catch (err) {
-    console.error("Epoch parsing error:", err);
+  } catch (e) {
+    console.error("Epoch parse error:", e);
     return res.status(500).json({ error: "Invalid TLE epoch" });
   }
 
   try {
-    // 1. Insert/update main satellite record
+    // 1. satellites table
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -387,14 +390,14 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ]
     );
 
-    // 2. Insert into tle_history
+    // 2. tle_history
     await pool.query(`
       INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived
+    // 3. tle_derived – 19 columns (id auto-generated)
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
@@ -420,11 +423,10 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("DB insert error:", err);
+    console.error("Add-satellite DB error:", err);
     res.status(500).json({ error: "Database error" });
   }
 });
-
 // PROTECTED: telemetry — filtered by user
 app.get("/api/telemetry/:norad_id", async (req, res) => {
   try {
