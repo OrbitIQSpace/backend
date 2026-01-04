@@ -326,7 +326,8 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   const data = await fetchFullSatelliteData(norad_id);
   if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
 
-  const derived = calculateDerivedParams(data);
+  const derived = calculateDerived(data.tle_line1, data.tle_line2); // ← Use calculateDerived(line1, line2) to parse all fields
+  if (!derived) return res.status(500).json({ error: "Failed to calculate derived parameters" });
 
   // Parse epoch for history tables
   const year = parseInt(data.tle_line1.slice(18, 20));
@@ -366,29 +367,29 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         data.name,
         data.tle_line1,
         data.tle_line2,
-        data.inclination,
-        data.mean_motion,
-        data.eccentricity,
-        data.semi_major_axis,
-        data.perigee,
-        data.apogee,
-        data.period,
-        derived.altitude,
+        derived.inclination, // ← Use derived for all fields
+        derived.mean_motion,
+        derived.eccentricity,
+        derived.semi_major_axis_km,
+        derived.perigee_km,
+        derived.apogee_km,
+        derived.orbital_period_minutes,
+        derived.altitude_km,
         derived.orbit_type,
-        derived.orbital_velocity_kms,
-        derived.orbital_velocity_kmh,
+        derived.velocity_kms,
+        derived.orbital_period_minutes * 60, // Calculate orbital_velocity_kmh if needed
         userId
       ]
     );
 
-    // 2. Insert into tle_history (raw TLE)
+    // 2. Insert into tle_history
     await pool.query(`
       INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived (calculated values)
+    // 3. Insert into tle_derived
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
