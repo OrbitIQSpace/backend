@@ -256,29 +256,23 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
   if (!norad_id) return res.status(400).json({ error: "Missing NORAD ID" });
 
-  const data = await fetchFullSatelliteData(norad_id);
-  if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
-
-  const derived = populateDerived(data.tle_line1, data.tle_line2);
-  if (!derived) return res.status(500).json({ error: "Failed to calculate derived parameters" });
-
-  // Parse epoch
-  let epochDate;
   try {
+    const data = await fetchFullSatelliteData(norad_id);
+    if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
+
+    const derived = populateDerived(data.tle_line1, data.tle_line2);
+    if (!derived) return res.status(500).json({ error: "Failed to calculate orbital parameters" });
+
+    // Parse epoch for history tables
     const year = parseInt(data.tle_line1.slice(18, 20));
     const dayOfYear = parseFloat(data.tle_line1.slice(20, 32));
     const fullYear = year < 57 ? 2000 + year : 1900 + year;
-    epochDate = new Date(Date.UTC(fullYear, 0));
+    const epochDate = new Date(Date.UTC(fullYear, 0));
     epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
     const fraction = dayOfYear % 1;
     epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
-  } catch (err) {
-    console.error("Epoch parsing error:", err);
-    return res.status(500).json({ error: "Invalid TLE epoch" });
-  }
 
-  try {
-    // 1. Main satellite record
+    // 1. Main satellite record - Mapping corrected to match populateDerived.js
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -290,17 +284,8 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         name = EXCLUDED.name,
         tle_line1 = EXCLUDED.tle_line1,
         tle_line2 = EXCLUDED.tle_line2,
-        inclination = EXCLUDED.inclination,
-        mean_motion = EXCLUDED.mean_motion,
-        eccentricity = EXCLUDED.eccentricity,
-        semi_major_axis = EXCLUDED.semi_major_axis,
-        perigee = EXCLUDED.perigee,
-        apogee = EXCLUDED.apogee,
-        period = EXCLUDED.period,
         altitude = EXCLUDED.altitude,
-        orbit_type = EXCLUDED.orbit_type,
-        orbital_velocity_kms = EXCLUDED.orbital_velocity_kms,
-        orbital_velocity_kmh = EXCLUDED.orbital_velocity_kmh`,
+        orbit_type = EXCLUDED.orbit_type`,
       [
         data.norad_id,
         data.name,
@@ -309,13 +294,13 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         derived.inclination,
         derived.mean_motion,
         derived.eccentricity,
-        derived.semi_major_axis_km,
-        derived.perigee_km,
-        derived.apogee_km,
+        derived.semi_major_axis_km, // Matches your .js
+        derived.perigee_km,         // Matches your .js
+        derived.apogee_km,          // Matches your .js
         derived.orbital_period_minutes,
-        derived.altitude_km,
+        derived.altitude_km,        // Matches your .js
         derived.orbit_type,
-        derived.velocity_kms,
+        derived.velocity_kms,       // Matches your .js
         derived.orbital_velocity_kmh,
         userId
       ]
@@ -328,19 +313,14 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived — 19 columns + 19 values (id auto-generated)
+    // 3. Insert into tle_derived
     await pool.query(`
       INSERT INTO tle_derived (
-        norad_id, name, epoch,
-        inclination, eccentricity, mean_motion,
-        semi_major_axis_km, perigee_km, apogee_km,
-        orbital_period_minutes, altitude_km, velocity_kms,
-        raan, arg_perigee, mean_anomaly,
-        bstar, mean_motion_dot, mean_motion_ddot,
-        user_id
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-      )
+        norad_id, name, epoch, inclination, eccentricity, mean_motion,
+        semi_major_axis_km, perigee_km, apogee_km, orbital_period_minutes,
+        altitude_km, velocity_kms, raan, arg_perigee, mean_anomaly,
+        bstar, mean_motion_dot, mean_motion_ddot, user_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [
       data.norad_id, data.name, epochDate,
@@ -354,8 +334,8 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("DB insert error:", err);
-    res.status(500).json({ error: "Database error" });
+    console.error("DEBUG DB ERROR:", err.message);
+    res.status(500).json({ error: `Database Detail: ${err.message}` });
   }
 });
 
