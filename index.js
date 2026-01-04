@@ -16,13 +16,13 @@ import multer from "multer";
 import csv from "csv-parser";
 import { createReadStream, unlinkSync } from "fs";
 import { ClerkExpressRequireAuth } from '@clerk/clerk-sdk-node';
-import { populateDerived } from './scripts/populatedDerived.js';
+import { populateDerived } from './scripts/populateDerived.js'; // ← Accurate TLE parser
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// CORS — allow Vercel frontend (orbitiqspace.com) and localhost
+// CORS — allow live domain + localhost
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowedOrigins = [
@@ -51,7 +51,7 @@ const upload = multer({ dest: "uploads/" });
 // Prioritizes DATABASE_URL (Render, Railway, Supabase standard)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false, // Required for hosted DBs
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
   // Fallback for local development
   user: process.env.DB_USER || "postgres",
   host: process.env.DB_HOST || "localhost",
@@ -83,7 +83,6 @@ const initDatabase = async () => {
       ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS user_id TEXT;
     `);
 
-    // Fill NULL user_id with admin (safe for legacy data)
     await pool.query(`
       UPDATE satellites SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
       UPDATE tle_history SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
@@ -91,7 +90,6 @@ const initDatabase = async () => {
       UPDATE telemetry SET user_id = 'user_37CroUWyRbmd5cUfH2s9DKm2BoQ' WHERE user_id IS NULL;
     `);
 
-    // Apply composite primary key
     await pool.query(`
       ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_pkey CASCADE;
       ALTER TABLE satellites DROP CONSTRAINT IF EXISTS satellites_multi_user_key;
@@ -170,32 +168,6 @@ const fetchFullSatelliteData = async (noradId) => {
   }
 };
 
-// ------------------------- ORBIT CALCULATIONS -------------------------
-const calculateDerivedParams = (data) => {
-  const meanMotion = data.mean_motion;
-  if (!meanMotion || meanMotion <= 0) {
-    return { altitude: 0, orbit_type: "UNKNOWN", orbital_velocity_kms: "0.000", orbital_velocity_kmh: 0 };
-  }
-
-  const periodSec = 86400 / meanMotion;
-  const semiMajorAxis = data.semi_major_axis || Math.cbrt(398600.4418 * Math.pow(periodSec / (2 * Math.PI), 2));
-  const altitude = semiMajorAxis - 6378.137;
-  const velocityKms = (2 * Math.PI * semiMajorAxis) / periodSec;
-
-  let orbit_type = "UNKNOWN";
-  if (altitude < 2000) orbit_type = "LEO";
-  else if (altitude < 35786) orbit_type = "MEO";
-  else if (Math.abs(altitude - 35786) <= 2000) orbit_type = "GEO";
-  else orbit_type = "HEO";
-
-  return {
-    altitude: Math.round(altitude),
-    orbit_type,
-    orbital_velocity_kms: velocityKms.toFixed(3),
-    orbital_velocity_kmh: Math.round(velocityKms * 3600),
-  };
-};
-
 // ------------------------- ROUTES -------------------------
 
 // PUBLIC: Latest ISS TLE
@@ -262,7 +234,7 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
       const fresh = await fetchFullSatelliteData(norad_id);
       if (!fresh) return res.status(404).json({ error: "Satellite not found" });
 
-      const derived = calculateDerivedParams(fresh);
+      const derived = populateDerived(fresh.tle_line1, fresh.tle_line2);
 
       result = await pool.query(
         `INSERT INTO satellites (
@@ -292,16 +264,16 @@ app.get("/api/satellite/:norad_id", async (req, res) => {
           fresh.name,
           fresh.tle_line1,
           fresh.tle_line2,
-          fresh.inclination,
-          fresh.mean_motion,
-          fresh.eccentricity,
-          fresh.semi_major_axis,
-          fresh.perigee,
-          fresh.apogee,
-          fresh.period,
-          derived.altitude,
+          derived.inclination,
+          derived.mean_motion,
+          derived.eccentricity,
+          derived.semi_major_axis_km,
+          derived.perigee_km,
+          derived.apogee_km,
+          derived.orbital_period_minutes,
+          derived.altitude_km,
           derived.orbit_type,
-          derived.orbital_velocity_kms,
+          derived.velocity_kms,
           derived.orbital_velocity_kmh,
           userId
         ]
@@ -327,11 +299,10 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   const data = await fetchFullSatelliteData(norad_id);
   if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
 
-  // <-- NEW: use the shared helper that works with raw TLE lines
   const derived = populateDerived(data.tle_line1, data.tle_line2);
-  if (!derived) return res.status(500).json({ error: "Failed to derive orbital parameters" });
+  if (!derived) return res.status(500).json({ error: "Failed to calculate derived parameters" });
 
-  // Parse epoch (same as before)
+  // Parse epoch
   let epochDate;
   try {
     const year = parseInt(data.tle_line1.slice(18, 20));
@@ -341,13 +312,13 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
     epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
     const fraction = dayOfYear % 1;
     epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
-  } catch (e) {
-    console.error("Epoch parse error:", e);
+  } catch (err) {
+    console.error("Epoch parsing error:", err);
     return res.status(500).json({ error: "Invalid TLE epoch" });
   }
 
   try {
-    // 1. satellites table
+    // 1. Main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -397,7 +368,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. tle_derived – 19 columns (id auto-generated)
+    // 3. tle_derived — 19 columns + user_id = 20 values
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
@@ -408,7 +379,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         bstar, mean_motion_dot, mean_motion_ddot,
         user_id
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
       )
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [
@@ -423,10 +394,44 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Add-satellite DB error:", err);
+    console.error("DB insert error:", err);
     res.status(500).json({ error: "Database error" });
   }
 });
+
+// PROTECTED: tle_derived — filtered by user
+app.get('/api/tle_derived/:noradId', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 
+        epoch,
+        inclination,
+        eccentricity,
+        mean_motion,
+        semi_major_axis_km,
+        perigee_km,
+        apogee_km,
+        orbital_period_minutes,
+        altitude_km,
+        velocity_kms,
+        raan,
+        arg_perigee,
+        mean_anomaly,
+        bstar,
+        mean_motion_dot,
+        mean_motion_ddot
+      FROM tle_derived 
+      WHERE norad_id = $1 AND user_id = $2
+      ORDER BY epoch ASC
+    `, [req.params.noradId, req.auth.userId]);
+
+    res.json(rows);
+  } catch (err) {
+    console.error('tle_derived fetch error:', err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 // PROTECTED: telemetry — filtered by user
 app.get("/api/telemetry/:norad_id", async (req, res) => {
   try {
