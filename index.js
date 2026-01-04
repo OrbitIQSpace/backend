@@ -327,14 +327,14 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   if (!data) return res.status(404).json({ error: "Invalid NORAD ID" });
 
   const derived = calculateDerivedParams(data);
-  if (!derived) return res.status(500).json({ error: "Failed to calculate orbital parameters" });
 
-  // Parse epoch safely
+  // Move epochDate outside try block
+  let epochDate;
   try {
     const year = parseInt(data.tle_line1.slice(18, 20));
     const dayOfYear = parseFloat(data.tle_line1.slice(20, 32));
     const fullYear = year < 57 ? 2000 + year : 1900 + year;
-    const epochDate = new Date(Date.UTC(fullYear, 0));
+    epochDate = new Date(Date.UTC(fullYear, 0));
     epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
     const fraction = dayOfYear % 1;
     epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
@@ -344,7 +344,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   }
 
   try {
-    // 1. Main satellite record
+    // 1. Insert/update main satellite record
     await pool.query(
       `INSERT INTO satellites (
         norad_id, name, tle_line1, tle_line2, inclination, mean_motion,
@@ -387,14 +387,14 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ]
     );
 
-    // 2. tle_history
+    // 2. Insert into tle_history
     await pool.query(`
       INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. tle_derived — 19 columns (id auto)
+    // 3. Insert into tle_derived
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
@@ -420,8 +420,8 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("Add satellite DB error:", err);
-    res.status(500).json({ error: "Database error: " + err.message });
+    console.error("DB insert error:", err);
+    res.status(500).json({ error: "Database error" });
   }
 });
 
