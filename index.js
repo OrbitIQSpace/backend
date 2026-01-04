@@ -302,6 +302,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
   const derived = populateDerived(data.tle_line1, data.tle_line2);
   if (!derived) return res.status(500).json({ error: "Failed to calculate derived parameters" });
 
+  // Parse epoch
   let epochDate;
   try {
     const year = parseInt(data.tle_line1.slice(18, 20));
@@ -367,7 +368,7 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
       ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
     `, [data.norad_id, data.name, data.tle_line1, data.tle_line2, epochDate, userId]);
 
-    // 3. Insert into tle_derived — 19 columns + 19 values
+    // 3. Insert into tle_derived — 19 columns + 19 values (id auto-generated)
     await pool.query(`
       INSERT INTO tle_derived (
         norad_id, name, epoch,
@@ -397,7 +398,6 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 });
-
 // PROTECTED: tle_derived — filtered by user
 app.get('/api/tle_derived/:noradId', async (req, res) => {
   try {
