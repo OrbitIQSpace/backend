@@ -1,7 +1,7 @@
-// backend/jobs/fetchDailyTLEs.js 
+// backend/jobs/fetchDailyTLEs.js — CRON JOB VERSION (runs once per trigger)
 import axios from 'axios';
 import { pool } from '../index.js';
-import { populateDerived } from '../scripts/populatedDerived.js'; 
+import { populateDerived } from '../scripts/populatedDerived.js'; // Your accurate parser
 
 const USERNAME = process.env.SPACETRACK_USER;
 const PASSWORD = process.env.SPACETRACK_PASS;
@@ -71,13 +71,16 @@ const fetchAndStoreTLEs = async () => {
         }
 
         const lines = data.split('\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length < 2) continue;
+        if (lines.length < 2) {
+          console.warn(`Invalid TLE format for NORAD ${norad}`);
+          continue;
+        }
 
         let name = lines[0];
         let line1 = lines[1];
         let line2 = lines[2] || lines[1];
 
-        // Parse epoch
+        // Parse epoch correctly from line1
         const year = parseInt(line1.slice(18, 20));
         const dayOfYear = parseFloat(line1.slice(20, 32));
         const fullYear = year < 57 ? 2000 + year : 1900 + year;
@@ -92,14 +95,14 @@ const fetchAndStoreTLEs = async () => {
           continue;
         }
 
-        // Insert into tle_history
+        // Insert into tle_history — correct order
         await pool.query(`
           INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
           VALUES ($1, $2, $3, $4, $5, $6)
           ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
         `, [norad, name, line1, line2, epochDate, userId]);
 
-        // Insert into tle_derived
+        // Insert into tle_derived — 19 columns + 19 values
         await pool.query(`
           INSERT INTO tle_derived (
             norad_id, name, epoch,
@@ -128,6 +131,7 @@ const fetchAndStoreTLEs = async () => {
         console.warn(`Failed for NORAD ${norad}:`, err.message);
       }
 
+      // Be kind to Space-Track
       await sleep(1000);
     }
 
@@ -137,4 +141,5 @@ const fetchAndStoreTLEs = async () => {
   }
 };
 
+// RUN ONCE — CRON JOB HANDLES SCHEDULING
 fetchAndStoreTLEs();
