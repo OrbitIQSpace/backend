@@ -57,7 +57,8 @@ const fetchAndStoreTLEs = async () => {
 
     for (const { norad_id: norad, user_id: userId } of rows) {
       try {
-        const url = `https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/${norad}/orderby/EPOCH%20desc/format/tle/limit/1`;
+        // FIXED: Use format/3le to get Name + Line1 + Line2
+        const url = `https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/${norad}/orderby/EPOCH%20desc/format/3le/limit/1`;
 
         const response = await axios.get(url, {
           headers: { Cookie: cookies.join('; ') },
@@ -71,23 +72,30 @@ const fetchAndStoreTLEs = async () => {
         }
 
         const lines = data.split('\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length < 2) {
-          console.warn(`Invalid TLE format for NORAD ${norad}`);
+        if (lines.length < 3) {
+          console.warn(`Invalid 3le format for NORAD ${norad} — expected 3 lines, got ${lines.length}`);
           continue;
         }
 
-        let name = lines[0];
-        let line1 = lines[1];
-        let line2 = lines[2] || lines[1];
+        // CORRECT ASSIGNMENT — 3le format
+        const name = lines[0];    // Line 0: Satellite name
+        const line1 = lines[1];   // Line 1: TLE line 1
+        const line2 = lines[2];   // Line 2: TLE line 2
 
-        // Parse epoch correctly from line1
+        // Validate format
+        if (!line1.startsWith('1 ') || !line2.startsWith('2 ')) {
+          console.warn(`Malformed TLE for NORAD ${norad}`);
+          continue;
+        }
+
+        // Parse epoch from line1
         const year = parseInt(line1.slice(18, 20));
         const dayOfYear = parseFloat(line1.slice(20, 32));
         const fullYear = year < 57 ? 2000 + year : 1900 + year;
         const epochDate = new Date(Date.UTC(fullYear, 0));
-        epochDate.setUTCDate(epochDate.getUTCDate() + dayOfYear - 1);
-        const fraction = dayOfYear % 1;
-        epochDate.setSeconds(epochDate.getSeconds() + fraction * 86400);
+        epochDate.setUTCDate(epochDate.getUTCDate() + Math.floor(dayOfYear) - 1);
+        const millisecondsInDay = (dayOfYear % 1) * 86400000;
+        epochDate.setMilliseconds(epochDate.getMilliseconds() + millisecondsInDay);
 
         const derived = populateDerived(line1, line2);
         if (!derived) {
@@ -95,7 +103,7 @@ const fetchAndStoreTLEs = async () => {
           continue;
         }
 
-        // Insert into tle_history — correct order
+        // Insert into tle_history
         await pool.query(`
           INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
           VALUES ($1, $2, $3, $4, $5, $6)
@@ -131,8 +139,7 @@ const fetchAndStoreTLEs = async () => {
         console.warn(`Failed for NORAD ${norad}:`, err.message);
       }
 
-      // Be kind to Space-Track
-      await sleep(1000);
+      await sleep(1000); // Respect Space-Track
     }
 
     console.log(`✅ TLE job complete — processed ${storedCount} satellites`);
