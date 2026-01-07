@@ -1,19 +1,19 @@
-// backend/jobs/fetchDailyTLEs.js — CRON JOB ONLY (runs once and exits)
+// backend/jobs/fetchDailyTLEs.js — CRON JOB VERSION (runs once per trigger)
 import axios from 'axios';
-import { Pool } from 'pg';
-import { populateDerived } from '../scripts/populatedDerived.js';
-
-// Database connection — separate from web server
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
-});
+import { Pool } from "pg";
+import { populateDerived } from '../scripts/populatedDerived.js'; // Your accurate parser
 
 const USERNAME = process.env.SPACETRACK_USER;
 const PASSWORD = process.env.SPACETRACK_PASS;
 
 let cookies = null;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Separate DB pool for cron job
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+});
 
 const loginToSpaceTrack = async () => {
   if (!USERNAME || !PASSWORD) {
@@ -63,6 +63,7 @@ const fetchAndStoreTLEs = async () => {
 
     for (const { norad_id: norad, user_id: userId } of rows) {
       try {
+        // Use 3le format to get name line
         const url = `https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/${norad}/orderby/EPOCH%20desc/format/3le/limit/1`;
 
         const response = await axios.get(url, {
@@ -101,14 +102,52 @@ const fetchAndStoreTLEs = async () => {
           continue;
         }
 
-        // Insert into tle_history
+        // 1. UPDATE satellites table with latest TLE and derived values
+        await pool.query(`
+          UPDATE satellites
+          SET
+            name = $1,
+            tle_line1 = $2,
+            tle_line2 = $3,
+            inclination = $4,
+            mean_motion = $5,
+            eccentricity = $6,
+            semi_major_axis = $7,
+            perigee = $8,
+            apogee = $9,
+            period = $10,
+            altitude = $11,
+            orbit_type = $12,
+            orbital_velocity_kms = $13,
+            orbital_velocity_kmh = $14
+          WHERE norad_id = $15 AND user_id = $16
+        `, [
+          name,
+          line1,
+          line2,
+          derived.inclination,
+          derived.mean_motion,
+          derived.eccentricity,
+          derived.semi_major_axis_km,
+          derived.perigee_km,
+          derived.apogee_km,
+          derived.orbital_period_minutes,
+          derived.altitude_km,
+          derived.orbit_type,
+          derived.velocity_kms,
+          derived.orbital_velocity_kmh,
+          norad,
+          userId
+        ]);
+
+        // 2. Insert into tle_history
         await pool.query(`
           INSERT INTO tle_history (norad_id, name, tle_line1, tle_line2, epoch, user_id)
           VALUES ($1, $2, $3, $4, $5, $6)
           ON CONFLICT (norad_id, epoch, user_id) DO NOTHING
         `, [norad, name, line1, line2, epochDate, userId]);
 
-        // Insert into tle_derived
+        // 3. Insert into tle_derived
         await pool.query(`
           INSERT INTO tle_derived (
             norad_id, name, epoch,
@@ -137,14 +176,13 @@ const fetchAndStoreTLEs = async () => {
         console.warn(`Failed for NORAD ${norad}:`, err.message);
       }
 
-      await sleep(1000);
+      await sleep(1000); // Respect rate limits
     }
 
     console.log(`✅ TLE job complete — processed ${storedCount} satellites`);
   } catch (err) {
     console.error('❌ TLE job failed:', err.message);
   } finally {
-    // Important: close DB connection so job exits
     await pool.end();
     process.exit(0);
   }
