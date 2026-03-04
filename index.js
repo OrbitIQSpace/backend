@@ -151,6 +151,7 @@ app.get('/api/public/iss', async (req, res) => {
 app.use(requireAuth);
 
 // PROTECTED: Satellites list — admin sees all, users see own
+// tle_line1 included so frontend can parse TLE epoch for "updated X ago" display
 app.get("/api/satellites", async (req, res) => {
   try {
     const userId = req.auth.userId;
@@ -158,7 +159,7 @@ app.get("/api/satellites", async (req, res) => {
 
     let query = `
       SELECT norad_id, name, orbit_type, altitude, inclination,
-             orbital_velocity_kms, orbital_velocity_kmh
+             orbital_velocity_kms, orbital_velocity_kmh, tle_line1
       FROM satellites
     `;
     const params = [];
@@ -294,13 +295,13 @@ app.post("/add-satellite", requireAuth, async (req, res) => {
         derived.inclination,
         derived.mean_motion,
         derived.eccentricity,
-        derived.semi_major_axis_km, // Matches your .js
-        derived.perigee_km,         // Matches your .js
-        derived.apogee_km,          // Matches your .js
+        derived.semi_major_axis_km,
+        derived.perigee_km,
+        derived.apogee_km,
         derived.orbital_period_minutes,
-        derived.altitude_km,        // Matches your .js
+        derived.altitude_km,
         derived.orbit_type,
-        derived.velocity_kms,       // Matches your .js
+        derived.velocity_kms,
         derived.orbital_velocity_kmh,
         userId
       ]
