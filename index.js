@@ -448,6 +448,120 @@ app.post("/upload/telemetry", upload.single("file"), async (req, res) => {
     });
 });
 
+// ------------------------- GROUND STATIONS -------------------------
+
+// Auto-create ground_stations table if it doesn't exist
+const initGroundStations = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ground_stations (
+      id                 SERIAL PRIMARY KEY,
+      user_id            TEXT NOT NULL,
+      name               VARCHAR(100) NOT NULL,
+      latitude           DECIMAL(9,6) NOT NULL,
+      longitude          DECIMAL(9,6) NOT NULL,
+      elevation_mask_deg DECIMAL(4,1) NOT NULL DEFAULT 5.0,
+      notes              TEXT,
+      created_at         TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ground_stations_user_id ON ground_stations(user_id);
+  `);
+};
+initGroundStations().catch(err => console.error('Ground stations table init error:', err));
+
+// GET /api/ground-stations — list all stations for the authed user
+app.get('/api/ground-stations', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const result = await pool.query(
+      'SELECT * FROM ground_stations WHERE user_id = $1 ORDER BY created_at ASC',
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET ground-stations error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/ground-stations — add a new station
+app.post('/api/ground-stations', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const { name, latitude, longitude, elevation_mask_deg = 5.0, notes = '' } = req.body;
+    if (!name || latitude == null || longitude == null) {
+      return res.status(400).json({ error: 'name, latitude, and longitude are required' });
+    }
+    if (latitude < -90 || latitude > 90)   return res.status(400).json({ error: 'latitude must be between -90 and 90' });
+    if (longitude < -180 || longitude > 180) return res.status(400).json({ error: 'longitude must be between -180 and 180' });
+
+    // Enforce a reasonable per-user limit
+    const countRes = await pool.query('SELECT COUNT(*) FROM ground_stations WHERE user_id = $1', [userId]);
+    if (parseInt(countRes.rows[0].count) >= 50) {
+      return res.status(400).json({ error: 'Maximum of 50 ground stations per account' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO ground_stations (user_id, name, latitude, longitude, elevation_mask_deg, notes)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [userId, name.trim(), parseFloat(latitude), parseFloat(longitude), parseFloat(elevation_mask_deg), notes.trim()]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST ground-stations error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/ground-stations/:id — update a station
+app.patch('/api/ground-stations/:id', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const { id } = req.params;
+    const { name, latitude, longitude, elevation_mask_deg, notes } = req.body;
+
+    const existing = await pool.query(
+      'SELECT * FROM ground_stations WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+    if (!existing.rows.length) return res.status(404).json({ error: 'Station not found' });
+
+    const updated = {
+      name:               name               ?? existing.rows[0].name,
+      latitude:           latitude           ?? existing.rows[0].latitude,
+      longitude:          longitude          ?? existing.rows[0].longitude,
+      elevation_mask_deg: elevation_mask_deg ?? existing.rows[0].elevation_mask_deg,
+      notes:              notes              ?? existing.rows[0].notes,
+    };
+
+    const result = await pool.query(
+      `UPDATE ground_stations SET name=$1, latitude=$2, longitude=$3, elevation_mask_deg=$4, notes=$5
+       WHERE id=$6 AND user_id=$7 RETURNING *`,
+      [updated.name, updated.latitude, updated.longitude, updated.elevation_mask_deg, updated.notes, id, userId]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('PATCH ground-stations error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/ground-stations/:id — remove a station
+app.delete('/api/ground-stations/:id', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const { id } = req.params;
+    const result = await pool.query(
+      'DELETE FROM ground_stations WHERE id = $1 AND user_id = $2 RETURNING id',
+      [id, userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Station not found' });
+    res.json({ success: true, id: result.rows[0].id });
+  } catch (err) {
+    console.error('DELETE ground-stations error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Global Error Handler
 app.use((err, req, res, next) => {
   if (err.message === 'Unauthenticated') return res.status(401).json({ error: "Authentication Required" });
