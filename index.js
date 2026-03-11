@@ -396,6 +396,38 @@ app.delete("/delete-satellite/:norad_id", async (req, res) => {
   }
 });
 
+// PROTECTED: Update spacecraft params — only user's own
+app.patch("/api/satellite/:norad_id/spacecraft-params", async (req, res) => {
+  const { norad_id } = req.params;
+  const { wet_mass_kg, dry_mass_kg, isp_s, thrust_n } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE satellites
+       SET wet_mass_kg = $1, dry_mass_kg = $2, isp_s = $3, thrust_n = $4
+       WHERE norad_id::text = $5 AND user_id = $6
+       RETURNING *`,
+      [
+        wet_mass_kg  != null ? parseFloat(wet_mass_kg)  : null,
+        dry_mass_kg  != null ? parseFloat(dry_mass_kg)  : null,
+        isp_s        != null ? parseFloat(isp_s)        : null,
+        thrust_n     != null ? parseFloat(thrust_n)     : null,
+        norad_id,
+        req.auth.userId,
+      ]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Satellite not found' });
+    }
+
+    res.json({ success: true, satellite: result.rows[0] });
+  } catch (err) {
+    console.error('spacecraft-params update error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // PROTECTED: Rename satellite — only user's own
 app.patch("/api/satellite/:norad_id/rename", async (req, res) => {
   const { norad_id } = req.params;
