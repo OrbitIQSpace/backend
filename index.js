@@ -500,6 +500,14 @@ const initGroundStations = async () => {
 };
 initGroundStations().catch(err => console.error('Ground stations table init error:', err));
 
+const initSpacecraftParams = async () => {
+  await pool.query(`ALTER TABLE satellites ADD COLUMN IF NOT EXISTS wet_mass_kg NUMERIC`);
+  await pool.query(`ALTER TABLE satellites ADD COLUMN IF NOT EXISTS dry_mass_kg NUMERIC`);
+  await pool.query(`ALTER TABLE satellites ADD COLUMN IF NOT EXISTS isp_s       NUMERIC`);
+  await pool.query(`ALTER TABLE satellites ADD COLUMN IF NOT EXISTS thrust_n    NUMERIC`);
+};
+initSpacecraftParams().catch(err => console.error('Spacecraft params migration error:', err));
+
 // GET /api/ground-stations — list all stations for the authed user
 app.get('/api/ground-stations', requireAuth, async (req, res) => {
   try {
